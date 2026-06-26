@@ -1,0 +1,99 @@
+{
+  "_comment": "Sanitized reference configuration for Symphony. All values are placeholders. Real deployments inject secrets via .env (never committed) and use real, private repo/Jira identifiers.",
+
+  "jira": {
+    "base_url": "https://<your-org>.atlassian.net",
+    "project_key": "<PROJECT>",
+    "poll_interval_seconds": 15,
+    "max_results_per_poll": 25,
+    "active_statuses": ["Selected for Development", "Ready for Agent", "Rework", "In Progress"],
+    "in_progress_status": "In Progress",
+    "rework_status": "Rework",
+    "human_review_status": "human review",
+    "human_review_label": "agent-human-review",
+    "pickup_labels": ["agent-ready", "agent-rework"],
+    "pr_approved_statuses": ["PR Submitted", "Approved for PR", "Ready for PR", "PR Approved", "PR"],
+    "pr_approved_labels": ["agent-pr-approved"],
+    "pr_submitted_label": "agent-pr-submitted",
+    "terminal_status_categories": ["Done"],
+    "failure_labels": [
+      "agent-run-failed",
+      "agent-validation-failed",
+      "agent-orchestrator-error",
+      "agent-needs-video",
+      "agent-cross-repo-needed"
+    ]
+  },
+
+  "agent": {
+    "max_concurrent_agents": 1,
+    "agent_command": "<coding-agent-cli> -p --model <model>",
+    "agent_timeout_seconds": 2700,
+    "dev_server_max_seconds": 300,
+    "post_evidence_grace_seconds": 90,
+    "workspace_root": "workspaces",
+    "evidence_root": "evidence",
+    "excluded_commit_paths": ["agent-evidence", "evidence"],
+    "squash_before_push": true,
+    "review_comment_response_enabled": true,
+    "max_failure_auto_retries": 1,
+    "failure_retry_cooldown_seconds": 300,
+    "min_image_bytes": 1024,
+    "min_video_bytes": 102400
+  },
+
+  "git_identity": {
+    "name": "<Committer Name>",
+    "email": "<committer@example.com>"
+  },
+
+  "repos": [
+    {
+      "key": "frontend",
+      "name": "Frontend",
+      "match_terms": ["frontend", "ui", "react", "page", "component", "browser"],
+      "remote": "https://github.com/<org>/<frontend-repo>.git",
+      "default_branch": "development",
+      "bootstrap": "npm install",
+      "validation": "npm run build",
+      "validation_timeout_seconds": 2400,
+      "evidence_required": true
+    },
+    {
+      "key": "backend",
+      "name": "Backend",
+      "match_terms": ["backend", "api", "server", "endpoint", "schema", "migration"],
+      "remote": "https://github.com/<org>/<backend-repo>.git",
+      "default_branch": "development",
+      "bootstrap": "npm install",
+      "validation": "npm run build",
+      "validation_timeout_seconds": 2400,
+      "evidence_required": false
+    },
+    {
+      "key": "agents",
+      "name": "Agent services",
+      "match_terms": ["agent", "agentic", "pipeline", "llm"],
+      "remote": "https://github.com/<org>/<agents-repo>.git",
+      "default_branch": "main",
+      "bootstrap": "npm install",
+      "validation": "npm test",
+      "validation_timeout_seconds": 1800,
+      "evidence_required": false
+    }
+  ],
+
+  "slack": {
+    "enabled": true,
+    "message_prefix": "Agentic Development",
+    "upload_evidence": true,
+    "reply_polling_enabled": true,
+    "thread_state_path": "logs/slack-thread-state.json"
+  },
+
+  "runtime": {
+    "node_major_version": 20,
+    "lock_file": "logs/symphony.lock",
+    "log_file": "logs/symphony.log"
+  }
+}
