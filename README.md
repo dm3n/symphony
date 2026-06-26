@@ -73,4 +73,4 @@ Reference material: [`reference/config.reference.json`](reference/config.referen
 
 ---
 
-<sub>Part of the <a href="https://github.com/dm3n/daniel-edgar-ai-portfolio">Daniel Edgar — AI Systems Portfolio</a>. Built and maintained by <a href="https://github.com/dm3n">@dm3n</a>.</sub>
+<sub>Part of the <a href="https://github.com/dm3n/portfolio">Daniel Edgar — AI Systems Portfolio</a>. Built and maintained by <a href="https://github.com/dm3n">@dm3n</a>.</sub>
