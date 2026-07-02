@@ -48,6 +48,7 @@ defmodule SymphonyElixir.Config.Schema do
       field(:kind, :string)
       field(:endpoint, :string, default: "https://api.linear.app/graphql")
       field(:api_key, :string)
+      field(:email, :string)
       field(:project_slug, :string)
       field(:assignee, :string)
       field(:required_labels, {:array, :string}, default: [])
@@ -60,7 +61,7 @@ defmodule SymphonyElixir.Config.Schema do
       schema
       |> cast(
         attrs,
-        [:kind, :endpoint, :api_key, :project_slug, :assignee, :required_labels, :active_states, :terminal_states],
+        [:kind, :endpoint, :api_key, :email, :project_slug, :assignee, :required_labels, :active_states, :terminal_states],
         empty_values: []
       )
       |> update_change(:required_labels, fn labels ->
@@ -372,9 +373,12 @@ defmodule SymphonyElixir.Config.Schema do
   end
 
   defp finalize_settings(settings) do
+    default_api_key_env = if settings.tracker.kind == "jira", do: "JIRA_API_TOKEN", else: "LINEAR_API_KEY"
+
     tracker = %{
       settings.tracker
-      | api_key: resolve_secret_setting(settings.tracker.api_key, System.get_env("LINEAR_API_KEY")),
+      | api_key: resolve_secret_setting(settings.tracker.api_key, System.get_env(default_api_key_env)),
+        email: resolve_secret_setting(settings.tracker.email, System.get_env("JIRA_EMAIL")),
         assignee: resolve_secret_setting(settings.tracker.assignee, System.get_env("LINEAR_ASSIGNEE"))
     }
 

@@ -3,9 +3,36 @@ defmodule SymphonyElixir.Codex.DynamicTool do
   Executes client-side tool calls requested by Codex app-server turns.
   """
 
+  alias SymphonyElixir.Config
+  alias SymphonyElixir.Jira
   alias SymphonyElixir.Linear.Client
 
   @linear_graphql_tool "linear_graphql"
+  @jira_request_tool "jira_request"
+  @jira_request_description """
+  Execute a raw Jira Cloud REST API request using Symphony's configured auth.
+  """
+  @jira_request_input_schema %{
+    "type" => "object",
+    "additionalProperties" => false,
+    "required" => ["path"],
+    "properties" => %{
+      "method" => %{
+        "type" => "string",
+        "enum" => ["GET", "POST", "PUT", "DELETE"],
+        "description" => "HTTP method. Defaults to GET."
+      },
+      "path" => %{
+        "type" => "string",
+        "description" => "Jira REST path starting with /rest/, e.g. /rest/api/2/issue/AD-1/comment. May include a query string."
+      },
+      "body" => %{
+        "type" => ["object", "null"],
+        "description" => "Optional JSON body for POST/PUT requests.",
+        "additionalProperties" => true
+      }
+    }
+  }
   @linear_graphql_description """
   Execute a raw GraphQL query or mutation against Linear using Symphony's configured auth.
   """
@@ -32,6 +59,9 @@ defmodule SymphonyElixir.Codex.DynamicTool do
       @linear_graphql_tool ->
         execute_linear_graphql(arguments, opts)
 
+      @jira_request_tool ->
+        execute_jira_request(arguments, opts)
+
       other ->
         failure_response(%{
           "error" => %{
@@ -44,13 +74,103 @@ defmodule SymphonyElixir.Codex.DynamicTool do
 
   @spec tool_specs() :: [map()]
   def tool_specs do
-    [
-      %{
-        "name" => @linear_graphql_tool,
-        "description" => @linear_graphql_description,
-        "inputSchema" => @linear_graphql_input_schema
-      }
-    ]
+    case tracker_kind() do
+      "jira" ->
+        [
+          %{
+            "name" => @jira_request_tool,
+            "description" => @jira_request_description,
+            "inputSchema" => @jira_request_input_schema
+          }
+        ]
+
+      _ ->
+        [
+          %{
+            "name" => @linear_graphql_tool,
+            "description" => @linear_graphql_description,
+            "inputSchema" => @linear_graphql_input_schema
+          }
+        ]
+    end
+  end
+
+  defp tracker_kind do
+    Config.settings!().tracker.kind
+  rescue
+    _error -> nil
+  catch
+    :exit, _reason -> nil
+  end
+
+  defp execute_jira_request(arguments, opts) do
+    jira_client = Keyword.get(opts, :jira_client, &Jira.Client.rest/3)
+
+    with {:ok, method, path, body} <- normalize_jira_request_arguments(arguments),
+         {:ok, response} <- jira_client.(method, path, body) do
+      dynamic_tool_response(true, encode_payload(response))
+    else
+      {:error, reason} ->
+        failure_response(jira_tool_error_payload(reason))
+    end
+  end
+
+  defp normalize_jira_request_arguments(arguments) when is_map(arguments) do
+    path = Map.get(arguments, "path") || Map.get(arguments, :path)
+    method = Map.get(arguments, "method") || Map.get(arguments, :method) || "GET"
+    body = Map.get(arguments, "body") || Map.get(arguments, :body)
+
+    cond do
+      not is_binary(path) or String.trim(path) == "" ->
+        {:error, :missing_jira_path}
+
+      not is_binary(method) ->
+        {:error, :invalid_jira_method}
+
+      not (is_map(body) or is_nil(body)) ->
+        {:error, :invalid_jira_body}
+
+      true ->
+        {:ok, String.upcase(method), String.trim(path), body}
+    end
+  end
+
+  defp normalize_jira_request_arguments(_arguments), do: {:error, :missing_jira_path}
+
+  defp jira_tool_error_payload(:missing_jira_path) do
+    %{"error" => %{"message" => "`jira_request` requires a non-empty `path` string starting with /rest/."}}
+  end
+
+  defp jira_tool_error_payload(:invalid_jira_method) do
+    %{"error" => %{"message" => "`jira_request.method` must be one of GET, POST, PUT, DELETE."}}
+  end
+
+  defp jira_tool_error_payload(:invalid_jira_body) do
+    %{"error" => %{"message" => "`jira_request.body` must be a JSON object when provided."}}
+  end
+
+  defp jira_tool_error_payload(:jira_path_must_start_with_rest) do
+    %{"error" => %{"message" => "`jira_request.path` must start with /rest/."}}
+  end
+
+  defp jira_tool_error_payload(:missing_jira_api_token) do
+    %{"error" => %{"message" => "Symphony is missing Jira auth. Set `tracker.api_key` in `WORKFLOW.md` or export `JIRA_API_TOKEN`."}}
+  end
+
+  defp jira_tool_error_payload(:missing_jira_email) do
+    %{"error" => %{"message" => "Symphony is missing the Jira account email. Set `tracker.email` in `WORKFLOW.md` or export `JIRA_EMAIL`."}}
+  end
+
+  defp jira_tool_error_payload({:jira_api_status, status}) do
+    %{"error" => %{"message" => "Jira REST request failed with HTTP #{status}.", "status" => status}}
+  end
+
+  defp jira_tool_error_payload({:jira_api_request, reason}) do
+    %{"error" => %{"message" => "Jira REST request failed before receiving a successful response.", "reason" => inspect(reason)}}
+  end
+
+  defp jira_tool_error_payload(reason) do
+    %{"error" => %{"message" => "Jira REST tool execution failed.", "reason" => inspect(reason)}}
   end
 
   defp execute_linear_graphql(arguments, opts) do

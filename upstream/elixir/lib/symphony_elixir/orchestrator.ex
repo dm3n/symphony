@@ -264,6 +264,18 @@ defmodule SymphonyElixir.Orchestrator do
         Logger.error("Linear project slug missing in WORKFLOW.md")
         state
 
+      {:error, :missing_jira_api_token} ->
+        Logger.error("Jira API token missing in WORKFLOW.md (set tracker.api_key or JIRA_API_TOKEN)")
+        state
+
+      {:error, :missing_jira_email} ->
+        Logger.error("Jira account email missing in WORKFLOW.md (set tracker.email or JIRA_EMAIL)")
+        state
+
+      {:error, :missing_jira_project_key} ->
+        Logger.error("Jira project key missing in WORKFLOW.md (set tracker.project_slug)")
+        state
+
       {:error, :missing_tracker_kind} ->
         Logger.error("Tracker kind missing in WORKFLOW.md")
 
