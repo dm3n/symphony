@@ -1,76 +1,116 @@
-<h1 align="center">Symphony</h1>
+# Symphony @ Finsider
 
-<p align="center">
-  <b>A Jira-native, evidence-gated, supervised-autonomy software-delivery runner.</b><br>
-  Takes a product ticket from backlog to a reviewed, evidence-backed pull request — with a human in the loop at every decision.
-</p>
+Autonomous software delivery for Finsider, built on
+[openai/symphony](https://github.com/openai/symphony) — OpenAI's open-source
+spec + reference implementation for orchestrating Codex agents from a task
+board — extended with a **native Jira adapter** so it lives on the Finsider
+Jira `AD` board.
 
-<p align="center">
-  <code>Python 3</code> · <code>Claude Code agent</code> · <code>Playwright evidence</code> · <code>Jira • GitHub • Slack</code> · <code>macOS LaunchAgent + GCP/systemd</code>
-</p>
+Every actionable ticket on the AD board gets a Codex agent running in an
+isolated workspace until the work is reviewed, approved, and landed. Humans
+manage the board; Symphony manages the work.
 
----
-
-> **Author & architect:** Daniel Ray Edgar — designed and built as CTO of [Finsider](https://finsider.ai), where Symphony runs in the live engineering environment driving real product tickets to pull requests.
->
-> **About this repository.** This is the **engineering design record** for Symphony — architecture, the Jira-native state machine, the production-hardening that makes it safe to point at a live codebase, the deployment topology, and sanitized reference interfaces. Employer-proprietary source, private repository identifiers, the Jira instance, and credentials are intentionally **not** published here. Everything below describes the design and the engineering decisions behind it.
-
----
-
-## TL;DR
-
-Symphony treats an LLM coding agent as a **capable but unprivileged developer**: it can implement, validate, and produce evidence — but it never holds approval authority. Every *decision* (is the scope complete? does the UI look right? can this merge?) is routed to a human, and Symphony makes that human's job trivial by attaching visual evidence and classifying their feedback automatically.
-
-The result is **supervised autonomy**: dozens of tickets driven from a one-line description to an evidence-backed, review-gated draft PR, with the genuinely hard parts solved — safe git, process hygiene, cross-repo correctness, fake-evidence rejection, and bounded failure recovery.
+## Architecture
 
 ```
-ticket ─▶ scope analysis ─▶ acceptance contract ─▶ agent implements
-      ─▶ validate (build/test) ─▶ capture screenshots/video
-      ─▶ HUMAN REVIEW (evidence attached) ─▶ classify feedback
-            ├─ question → answered in Jira, stays in review
-            ├─ rework   → re-run agent with a focused brief
-            └─ approve  → squash → force-with-lease push → draft PR
+Jira AD board  <──poll/comment/transition──  Symphony (Elixir, upstream/)
+                                                │
+                                    per-issue workspaces
+                                                │
+                                        codex app-server
+                                     (agents + jira_request tool
+                                      + gh + full dev toolchain)
+                                                │
+                                    GitHub PRs → finsider-ai/Mitch-fe
+                                                 finsider-ai/Mitch-be
 ```
 
-## Why it exists
+- `upstream/` — git subtree of `openai/symphony` (spec + Elixir reference
+  implementation) plus our Jira additions:
+  - `elixir/lib/symphony_elixir/jira/client.ex` — Jira Cloud REST client
+    (search/jql polling, comments, transitions, raw REST).
+  - `elixir/lib/symphony_elixir/jira/adapter.ex` — `Tracker` behaviour
+    implementation (`tracker.kind: jira`).
+  - `jira_request` dynamic tool injected into every Codex session (replaces
+    `linear_graphql` when the tracker is Jira).
+- `workflows/` — one WORKFLOW.md per target repo. Both watch the same `AD`
+  project and route by label: `mitch-fe` / `mitch-be`.
+- `skills/jira/` — the `jira` agent skill (copied into each workspace at
+  creation, alongside upstream's `commit`, `push`, `pull`, `land`, `debug`).
+- `ops/` — installer, start script, upstream auto-update, launchd services.
+- `docs/v1/` — the previous custom harness (retired 2026-07-02), kept for
+  reference.
 
-This is the engineering counterpart to a piece of research I wrote — [*Uncertainty Propagation in Tree-Structured Language Model Reasoning*](https://github.com/dm3n/uncertainty-propagation). That paper proves that a single long autonomous chain of reasoning decays **exponentially** in reliability: at a 10% per-step error rate, ten steps is already a coin flip. The practical consequence is that you cannot trust one long agent run to ship code.
+## Board contract (Jira `AD`)
 
-Symphony is the answer to that math. Instead of one long unsupervised chain, it decomposes delivery into **short, individually-verified, human-gated units** with hard evidence checkpoints. Each unit keeps per-step failure low; the human review gate aggregates across them. It is tree-structured reliability applied to software delivery.
+| Status | Meaning | Who moves it |
+|---|---|---|
+| Backlog | Not ready; Symphony ignores | Human |
+| Selected for Development | Queued for an agent | Human |
+| In Progress | Agent implementing | Agent |
+| human review | PR attached + validated, awaiting human | Agent |
+| Rework | Reviewer wants a different approach (full reset) | Human |
+| Merging | Approved; agent lands the PR | Human |
+| Done | Merged/closed | Agent |
 
-## What makes it notable
+Routing labels: `mitch-fe` (frontend instance), `mitch-be` (backend instance).
+A ticket must carry one of these labels to be picked up. Progress lives in a
+single persistent `## Codex Workpad` comment per issue; the PR is attached as
+a remote link.
 
-| | |
-|---|---|
-| **Jira *is* the state machine** | No external queue or database. Ticket status + labels are the control flow; reviewers just use Jira (or Slack). |
-| **Evidence-gated PRs** | No PR exists until implementation is done, the build passes, screenshots/video are attached, **and** a human approves. |
-| **Intent-classified review** | "Should this use X?" (question) vs "Can you make it smaller?" (rework) vs "lgtm" (approval) are distinguished by heuristics, keeping the loop tight. |
-| **Cross-repo scope critic** | Detects when a ticket needs changes across multiple repos and blocks review if coverage is incomplete. |
-| **Safe by construction** | `--force-with-lease` only, pinned commit identity, recursive process-tree cleanup, fake-evidence rejection, single-instance file lock. |
-| **Two production targets** | macOS LaunchAgent for local; an always-on GCP Compute Engine VM under systemd for production. |
+## Install / run
 
-## Documentation
+```bash
+ops/install.sh          # toolchain (mise: erlang 28 + elixir 1.19), build, tests, launchd
+```
 
-| Doc | What's inside |
-|---|---|
-| [docs/architecture.md](docs/architecture.md) | The full system: components, data flow, the orchestrator, integrations, and the system diagram. |
-| [docs/state-machine.md](docs/state-machine.md) | The Jira-native lifecycle — every status, label, transition, and the reviewer-feedback classifier. |
-| [docs/hardening.md](docs/hardening.md) | The production-grade engineering: safe git, watchdogs, evidence integrity, failure recovery, scope critics. |
-| [docs/deployment.md](docs/deployment.md) | macOS LaunchAgent and GCP/systemd deployment, environment checks, and operations. |
-| [docs/observability.md](docs/observability.md) | Logging, persistent state files, process supervision, and how to follow a run. |
-| [docs/security.md](docs/security.md) | Secrets handling, identity pinning, blast-radius controls, and the human-authority boundary. |
-| [docs/design-rationale.md](docs/design-rationale.md) | The "why" behind every major decision, and the link to the reasoning-reliability research. |
+Services (auto-start at login, keep-alive):
 
-Reference material: [`reference/config.reference.json`](reference/config.reference.json) (sanitized configuration schema) · [`reference/WORKFLOW.template.md`](reference/WORKFLOW.template.md) (the acceptance-contract prompt) · [`reference/orchestrator_interface.py`](reference/orchestrator_interface.py) (annotated interface skeleton).
+- `com.finsider.symphony.mitch-fe` — dashboard at http://127.0.0.1:4310
+- `com.finsider.symphony.mitch-be` — dashboard at http://127.0.0.1:4311
+- `com.finsider.symphony.update` — weekly upstream sync (Mon 05:00)
 
-## At a glance
+Secrets come from `~/finsider-platform/agentic-development/.env`
+(`JIRA_EMAIL`, `JIRA_API_TOKEN`; optional `SLACK_WEBHOOK_URL`,
+`GITHUB_TOKEN`). Nothing secret is committed to this repo.
 
-- **~2,300-line** single-file Python 3 orchestrator, standard library only — no heavyweight agent framework.
-- Drives a **Claude Code** agent headlessly with a rendered acceptance contract.
-- **Playwright** captures screenshots/video of the running result as review evidence.
-- Integrates **Jira Cloud** (state), **GitHub** via `gh` (draft PRs), and **Slack** (thread-per-ticket, bidirectional).
-- Concurrency-safe via an `fcntl` file lock; bounded worker pool; graceful shutdown.
+Codex auth: `codex login` (Codex subscription via ChatGPT sign-in, or API
+key). Agents run with `approval_policy: never`, workspace-write sandbox, and
+network access inside their isolated per-issue workspace.
 
----
+## Staying current with upstream
 
-<sub>Part of the <a href="https://github.com/dm3n/portfolio">Daniel Edgar — AI Systems Portfolio</a>. Built and maintained by <a href="https://github.com/dm3n">@dm3n</a>.</sub>
+`upstream/` is a squashed git subtree. The weekly `ops/update-upstream.sh`:
+
+1. `git subtree pull` from `openai/symphony@main`
+2. rebuild + full `mix test`
+3. green → push + restart services; red or conflict → roll back and notify
+   Slack
+
+Run it manually any time: `ops/update-upstream.sh`.
+
+## Manual ops
+
+```bash
+# start one instance in the foreground (debugging)
+ops/start-symphony.sh workflows/WORKFLOW.mitch-fe.md 4310
+
+# restart services
+launchctl kickstart -k gui/$(id -u)/com.finsider.symphony.mitch-fe
+launchctl kickstart -k gui/$(id -u)/com.finsider.symphony.mitch-be
+
+# stop everything
+launchctl bootout gui/$(id -u)/com.finsider.symphony.mitch-fe
+launchctl bootout gui/$(id -u)/com.finsider.symphony.mitch-be
+
+# logs
+tail -f logs/WORKFLOW.mitch-fe/*.log logs/launchd.mitch-fe.err.log
+```
+
+## History
+
+- **v2 (current)** — OG openai/symphony + native Jira adapter. This revamp.
+- **v1** (`docs/v1/`) — custom Python harness (2,300 LOC orchestrator) driving
+  coding agents against the AD board with screenshot/video evidence gating.
+  Retired 2026-07-02; archived at
+  `~/Archive/agentic-symphony-claude-harness-20260702/`.
